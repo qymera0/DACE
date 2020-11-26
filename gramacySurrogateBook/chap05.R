@@ -4,6 +4,7 @@
 library(plgp)
 library(mvtnorm)
 library(lhs)
+eps <- sqrt(.Machine$double.eps)
 
 # 5.1 GP Prior ------------------------------------------------------------
 
@@ -344,4 +345,258 @@ c(g, out$par)
 
 # # 5.2.4 Lengthscale: rate of decay of correlation -----------------------
 
+nl <- function(par, D, Y) 
+{
+  theta <- par[1]                                       ## change 1
+  g <- par[2]
+  n <- length(Y)
+  K <- exp(-D/theta) + diag(g, n)                       ## change 2
+  Ki <- solve(K)
+  ldetK <- determinant(K, logarithm=TRUE)$modulus
+  ll <- - (n/2)*log(t(Y) %*% Ki %*% Y) - (1/2)*ldetK
+  counter <<- counter + 1
+  return(-ll)
+}
 
+X2 <- randomLHS(40, 2)
+
+X2 <- rbind(X2, X2)
+
+X2[,1] <- (X2[,1] - 0.5)*6 + 1
+
+X2[,2] <- (X2[,2] - 0.5)*6 + 1
+
+y2 <- X2[,1]*exp(-X2[,1]^2 - X2[,2]^2) + rnorm(nrow(X2), sd=0.01)
+
+D <- distance(X2)
+
+counter <- 0
+
+out <- optim(c(0.1, 0.1*var(y2)), nl, method="L-BFGS-B", lower=eps, 
+             upper=c(10, var(y2)), D=D, Y=y2) 
+
+out$par
+
+brute <- c(out$counts, actual=counter)
+
+brute
+
+gradnl <- function(par, D, Y)
+{
+  ## extract parameters
+  theta <- par[1]
+  g <- par[2]
+  
+  ## calculate covariance quantities from data and parameters
+  n <- length(Y)
+  K <- exp(-D/theta) + diag(g, n)
+  Ki <- solve(K)
+  dotK <- K*D/theta^2
+  KiY <- Ki %*% Y
+  
+  ## theta component
+  dlltheta <- (n/2) * t(KiY) %*% dotK %*% KiY / (t(Y) %*% KiY) - 
+    (1/2)*sum(diag(Ki %*% dotK))
+  
+  ## g component
+  dllg <- (n/2) * t(KiY) %*% KiY / (t(Y) %*% KiY) - (1/2)*sum(diag(Ki))
+  
+  ## combine the components into a gradient vector
+  return(-c(dlltheta, dllg))
+}
+
+counter <- 0
+
+outg <- optim(c(0.1, 0.1*var(y2)), nl, gradnl, method="L-BFGS-B", 
+              lower=eps, upper=c(10, var(y2)), D=D, Y=y2) 
+
+rbind(grad=outg$par, brute=out$par)
+
+rbind(grad=c(outg$counts, actual=counter), brute)
+
+K <- exp(- D/outg$par[1]) + diag(outg$par[2], nrow(X2))
+
+Ki <- solve(K)
+
+tau2hat <- drop(t(y2) %*% Ki %*% y2 / nrow(X2))
+
+gn <- 40
+
+xx <- seq(-2, 4, length=gn)
+
+XX <- expand.grid(xx, xx)
+
+DXX <- distance(XX)
+
+KXX <- exp(-DXX/outg$par[1]) + diag(outg$par[2], ncol(DXX))
+
+DX <- distance(XX, X2)
+
+KX <- exp(-DX/outg$par[1])
+
+mup <- KX %*% Ki %*% y2
+
+Sigmap <- tau2hat*(KXX - KX %*% Ki %*% t(KX))
+
+sdp <- sqrt(diag(Sigmap))
+
+par(mfrow=c(1,2))
+
+image(xx, xx, matrix(mup, ncol=gn), main="mean", xlab="x1",
+      ylab="x2", col=cols)
+
+points(X2)
+
+image(xx, xx, matrix(sdp, ncol=gn), main="sd", xlab="x1",
+      ylab="x2", col=cols)
+
+points(X2)
+
+# 5.2.5 Anisotropic modeling
+
+fried <- function(n=50, m=6)
+{
+  if(m < 5) stop("must have at least 5 cols")
+  X <- randomLHS(n, m)
+  Ytrue <- 10*sin(pi*X[,1]*X[,2]) + 20*(X[,3] - 0.5)^2 + 10*X[,4] + 5*X[,5]
+  Y <- Ytrue + rnorm(n, 0, 1)
+  return(data.frame(X, Y, Ytrue))
+}
+
+m <- 7
+
+n <- 200
+
+nprime <- 1000
+
+data <- fried(n + nprime, m)
+
+X <- as.matrix(data[1:n,1:m])
+
+y <- drop(data$Y[1:n])
+
+XX <- as.matrix(data[(n + 1):(n + nprime),1:m])
+
+yy <- drop(data$Y[(n + 1):(n + nprime)])
+
+yytrue <- drop(data$Ytrue[(n + 1):(n + nprime)])
+
+D <- distance(X)
+
+out <- optim(c(0.1, 0.1*var(y)), nl, gradnl, method="L-BFGS-B", lower=eps, 
+             upper=c(10, var(y)), D=D, Y=y)
+
+out
+
+K <- exp(- D/out$par[1]) + diag(out$par[2], nrow(D))
+
+Ki <- solve(K)
+
+tau2hat <- drop(t(y) %*% Ki %*% y / nrow(D))
+
+DXX <- distance(XX)
+
+KXX <- exp(-DXX/out$par[1]) + diag(out$par[2], ncol(DXX))
+
+DX <- distance(XX, X)
+
+KX <- exp(-DX/out$par[1])
+
+mup <- KX %*% Ki %*% y
+
+Sigmap <- tau2hat*(KXX - KX %*% Ki %*% t(KX))
+
+rmse <- c(gpiso=sqrt(mean((yytrue - mup)^2)))
+
+rmse
+
+library(mda)
+
+fit.mars <- mars(X, y)
+
+p.mars <- predict(fit.mars, XX)
+
+rmse <- c(rmse, mars=sqrt(mean((yytrue - p.mars)^2)))
+
+rmse
+
+nlsep <- function(par, X, Y) 
+{
+  theta <- par[1:ncol(X)]  
+  g <- par[ncol(X)+1]
+  n <- length(Y)
+  K <- covar.sep(X, d=theta, g=g)
+  Ki <- solve(K)
+  ldetK <- determinant(K, logarithm=TRUE)$modulus
+  ll <- - (n/2)*log(t(Y) %*% Ki %*% Y) - (1/2)*ldetK
+  counter <<- counter + 1
+  return(-ll)
+}
+
+tic <- proc.time()[3]
+
+counter <- 0 
+
+out <- optim(c(rep(0.1, ncol(X)), 0.1*var(y)), nlsep, method="L-BFGS-B", 
+             X=X, Y=y, lower=eps, upper=c(rep(10, ncol(X)), var(y)))
+
+toc <- proc.time()[3]
+
+out$par
+
+brute <- c(out$counts, actual=counter)
+
+brute
+
+gradnlsep <- function(par, X, Y)
+{
+  theta <- par[1:ncol(X)]
+  g <- par[ncol(X)+1]
+  n <- length(Y)
+  K <- covar.sep(X, d=theta, g=g) 
+  Ki <- solve(K)
+  KiY <- Ki %*% Y
+  
+  ## loop over theta components
+  dlltheta <- rep(NA, length(theta))
+  for(k in 1:length(dlltheta)) {
+    dotK <- K * distance(X[,k])/(theta[k]^2)
+    dlltheta[k] <- (n/2) * t(KiY) %*% dotK %*% KiY / (t(Y) %*% KiY) - 
+      (1/2)*sum(diag(Ki %*% dotK))
+  }
+  
+  ## for g   
+  dllg <- (n/2) * t(KiY) %*% KiY / (t(Y) %*% KiY) - (1/2)*sum(diag(Ki))
+  
+  return(-c(dlltheta, dllg))
+}
+
+tic <- proc.time()[3]
+
+counter <- 0
+
+outg <- optim(c(rep(0.1, ncol(X)), 0.1*var(y)), nlsep, gradnlsep, 
+              method="L-BFGS-B", lower=eps, upper=c(rep(10, ncol(X)), var(y)), X=X, Y=y) 
+toc <- proc.time()[3]
+
+
+thetahat <- rbind(grad=outg$par, brute=out$par)
+
+colnames(thetahat) <- c(paste0("d", 1:ncol(X)), "g")
+
+thetahat
+
+rbind(grad=c(outg$counts, actual=counter), brute)
+
+toc - tic
+
+K <- covar.sep(X, d=outg$par[1:ncol(X)], g=outg$par[ncol(X)+1])
+Ki <- solve(K)
+tau2hat <- drop(t(y) %*% Ki %*% y / nrow(X))
+KXX <- covar.sep(XX, d=outg$par[1:ncol(X)], g=outg$par[ncol(X)+1]) 
+KX <- covar.sep(XX, X, d=outg$par[1:ncol(X)], g=0)
+mup2 <- KX %*% Ki %*% y
+Sigmap2 <- tau2hat*(KXX - KX %*% Ki %*% t(KX))
+
+rmse <- c(rmse, gpsep=sqrt(mean((yytrue - mup2)^2)))
+rmse
