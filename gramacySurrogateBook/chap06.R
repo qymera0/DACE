@@ -20,9 +20,9 @@ y <- f(X)
 
 # Initial model fitting
 
-g <- garg(list(mle = TRUE, max = 1), y)
+g <- garg(list(mle = TRUE, max = 1), y) # Priors GP correlation
 
-d <- darg(list(mle = TRUE, max = 0.25), X)
+d <- darg(list(mle = TRUE, max = 0.25), X) # Priors GP correlation
 
 gpi <- newGP(X, y, d = d$start, g = g$start, dK = T)
 
@@ -36,28 +36,18 @@ XX <- expand.grid(x1, x2)
 
 yytrue <- f(XX, sd = 0)
 
+initialPred <- predGP(gpi, XX, lite=T)
+
 rmse <- sqrt(mean((yytrue - predGP(gpi, XX, lite=TRUE)$mean)^2))
 
 # Determine where is the maximum variance
 
 obj.alm <- function(x, gpi){
-        - sqrt(predGP(gpi, matrix(x, nrow=1), lite=TRUE)$s2)
+        # Return the diagonal predictive covariance matrix
+        - sqrt(predGP(gpi, 
+                      matrix(x, nrow = 1), 
+                      lite = TRUE)$s2) # - because the answer will be minimized
 }
-
-xnp1.search <- function(X, gpi, obj=obj.alm, ...)
-{
-        start <- mymaximin(nrow(X), 2, T=100*nrow(X), Xorig=X)
-        xnew <- matrix(NA, nrow=nrow(start), ncol=ncol(X) + 1)
-        for(i in 1:nrow(start)) {
-                out <- optim(start[i,], obj, method="L-BFGS-B", lower=0, 
-                             upper=1, gpi=gpi, ...)
-                xnew[i,] <- c(out$par, -out$value)
-        }
-        solns <- data.frame(cbind(start, xnew))
-        names(solns) <- c("s1", "s2", "x1", "x2", "val")
-        return(solns)
-}
-
 
 mymaximin <- function(n, m, T=100000, Xorig=NULL) 
 {   
@@ -72,8 +62,8 @@ mymaximin <- function(n, m, T=100000, Xorig=NULL)
         
         for(t in 1:T) {
                 row <- sample(1:n, 1)
-                xold <- X[row,]                   ## random row selection
-                X[row,] <- runif(m)               ## random new row
+                xold <- X[row,] ## random row selection
+                X[row,] <- runif(m) ## random new row
                 d <- distance(X)
                 d <- d[upper.tri(d)]
                 mdprime <- min(d)
@@ -86,6 +76,20 @@ mymaximin <- function(n, m, T=100000, Xorig=NULL)
         }
         
         return(X)
+}
+
+xnp1.search <- function(X, gpi, obj=obj.alm, ...)
+{
+        start <- mymaximin(nrow(X), 2, T=100*nrow(X), Xorig=X)
+        xnew <- matrix(NA, nrow=nrow(start), ncol=ncol(X) + 1)
+        for(i in 1:nrow(start)) {
+                out <- optim(start[i,], obj, method="L-BFGS-B", lower=0, 
+                             upper=1, gpi=gpi, ...)
+                xnew[i,] <- c(out$par, -out$value)
+        }
+        solns <- data.frame(cbind(start, xnew))
+        names(solns) <- c("s1", "s2", "x1", "x2", "val")
+        return(solns)
 }
 
 solns <- xnp1.search(X, gpi)
@@ -114,20 +118,51 @@ mle <- rbind(mle, jmleGP(gpi, c(d$min, d$max), c(g$min, g$max),
 rmse <- c(rmse, sqrt(mean((yytrue - predGP(gpi, XX, lite=TRUE)$mean)^2)))
 
 solns <- xnp1.search(X, gpi)
+
 m <- which.max(solns$val)
+
 prog <- c(prog, solns$val[m])
+
 xnew <- as.matrix(solns[m, 3:4])
+
 X <- rbind(X, xnew)
+
 y <- c(y, f(xnew))
+
 updateGP(gpi, xnew, y[length(y)])
+
 mle <- rbind(mle, jmleGP(gpi, c(d$min, d$max), c(g$min, g$max), 
                          d$ab, g$ab))
 p <- predGP(gpi, XX, lite=TRUE)
+
 rmse <- c(rmse, sqrt(mean((yytrue - p$mean)^2)))
 
 plot(X, xlab="x1", ylab="x2", xlim=c(0,1), ylim=c(0,1))
+
 arrows(solns$s1, solns$s2, solns$x1, solns$x2, length=0.1)
+
 m <- which.max(solns$val)
+
 points(solns$x1[m], solns$x2[m], col=2, pch=20)
+
+# For Loop
+
+for(i in nrow(X):24) {
+        solns <- xnp1.search(X, gpi)
+        m <- which.max(solns$val)
+        prog <- c(prog, solns$val[m])
+        xnew <- as.matrix(solns[m, 3:4])
+        X <- rbind(X, xnew)
+        y <- c(y, f(xnew))
+        updateGP(gpi, xnew, y[length(y)])
+        mle <- rbind(mle, jmleGP(gpi, c(d$min, d$max), c(g$min, g$max), 
+                                 d$ab, g$ab))
+        p <- predGP(gpi, XX, lite=TRUE)
+        rmse <- c(rmse, sqrt(mean((yytrue - p$mean)^2)))
+}
+
+mle[seq(1,nrow(mle),by=2),]
+
+plot((ninit+1):nrow(X), prog, xlab="n")
 
 # Active learning Cohn
