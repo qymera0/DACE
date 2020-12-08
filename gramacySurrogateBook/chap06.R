@@ -166,3 +166,85 @@ mle[seq(1,nrow(mle),by=2),]
 plot((ninit+1):nrow(X), prog, xlab="n")
 
 # Active learning Cohn
+
+obj.alc <-
+        function (x, gpi, Xref){
+                - sqrt(alcGP(gpi, matrix(x, nrow = 1), Xref))
+        }
+
+deleteGP(gpi)
+
+X <- X[1:ninit,]
+
+y <- y[1:ninit]
+
+g <- garg(list(mle=TRUE, max=1), y)
+
+d <- darg(list(mle=TRUE, max=0.25), X)
+
+gpi <- newGP(X, y, d=d$start, g=g$start, dK=TRUE)
+
+mle <- jmleGP(gpi, c(d$min, d$max), c(g$min, g$max), d$ab, g$ab)
+
+p <- predGP(gpi, XX, lite = TRUE)
+
+rmse.alc <- sqrt(mean((yytrue - p$mean)^2))
+
+Xref <- randomLHS(100, 2)
+
+solns <- xnp1.search(X, gpi, obj=obj.alc, Xref=Xref)
+
+m <- which.max(solns$val)
+
+xnew <- as.matrix(solns[m, 3:4])
+
+prog.alc <- solns$val[m]
+
+plot(X, xlab="x1", ylab="x2", xlim=c(0,1), ylim=c(0,1))
+
+arrows(solns$s1, solns$s2, solns$x1, solns$x2, length=0.1)
+
+points(solns$x1[m], solns$x2[m], col=2, pch=20)
+
+points(Xref, cex=0.25, pch=20, col="gray")
+
+X <- rbind(X, xnew)
+
+y <- c(y, f(xnew))
+
+updateGP(gpi, xnew, y[length(y)])
+
+mle <- rbind(mle, jmleGP(gpi, c(d$min, d$max), c(g$min, g$max), 
+                         d$ab, g$ab))
+
+p <- predGP(gpi, XX, lite=TRUE)
+
+rmse.alc <- c(rmse.alc, sqrt(mean((yytrue - p$mean)^2)))
+
+d <- darg(list(mle=TRUE), X)
+
+for(i in nrow(X):99) {
+        Xref <- randomLHS(100, 2)
+        solns <- xnp1.search(X, gpi, obj=obj.alc, Xref=Xref)
+        m <- which.max(solns$val)
+        prog.alc <- c(prog.alc, solns$val[m])
+        xnew <- as.matrix(solns[m, 3:4])
+        X <- rbind(X, xnew)
+        y <- c(y, f(xnew))
+        updateGP(gpi, xnew, y[length(y)])
+        mle <- rbind(mle, jmleGP(gpi, c(d$min, d$max), c(g$min, g$max), 
+                                 d$ab, g$ab))
+        p <- predGP(gpi, XX, lite=TRUE)
+        rmse.alc <- c(rmse.alc, sqrt(mean((yytrue - p$mean)^2)))
+}
+
+par(mfrow=c(1,2))
+
+plot((ninit+1):nrow(X), prog.alc, xlab="n: design size", 
+     ylab="ALC progress")
+
+plot(ninit:nrow(X), rmse, xlab="n: design size", ylab="OOS RMSE")
+
+points(ninit:nrow(X), rmse.alc, col=2, pch=20)
+
+legend("topright", c("alm", "alc"), pch=c(21,20), col=1:2)
